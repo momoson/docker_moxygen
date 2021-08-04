@@ -1,0 +1,83 @@
+name: CI to Docker Hub
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  push:
+    branches: [ main ]
+
+env:
+  # Use docker.io for Docker Hub if empty
+  REGISTRY: docker.io
+  # github.repository as <account>/<repo>
+  IMAGE_NAME: momoson/moxygen
+  # whether a new version of doxygen and/or moxygen exists
+  NEW_VERSION: false
+
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        
+      - name: Download versions of doxygen and moxygen used for last build
+        uses: aochmann/actions-download-artifact@1.0.4
+        with:
+          latest: true
+          path: /tmp/versions_old
+          name: version
+        
+      - name: Check latest version of doxygen and moxygen
+        run: |
+          npm show moxygen version > /tmp/versions
+          docker run alpine:latest /bin/sh -c "apk update && apk search doxygen" | tail -n 1 >> /tmp/versions
+          diff /tmp/versions_old/versions /tmp/versions -q || echo "NEW_VERSION=true" >> $GITHUB_ENV
+
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: ${{ github.event_name == 'push' || env.NEW_VERSION == true }}
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: momoson
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      # Extract metadata (tags, labels) for Docker
+      # https://github.com/docker/metadata-action
+      - name: Extract Docker metadata
+        if: ${{ github.event_name == 'push' || env.NEW_VERSION == true }}
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      # Build and push Docker image with Buildx (don't push on PR)
+      # https://github.com/docker/build-push-action
+      - name: Build and push Docker image
+        if: ${{ github.event_name == 'push' || env.NEW_VERSION == true }}
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: ${{ steps.meta.outputs.labels }}
+          
+      - name: Upload latest versions as artifact
+        uses: actions/upload-artifact@v2
+        if: ${{ github.event_name == 'push' || env.NEW_VERSION == true }}
+        with:
+          name: version
+          path: /tmp/versions
+          retention-days: 1
